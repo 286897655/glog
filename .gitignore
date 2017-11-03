@@ -2,6 +2,7 @@ autom4te.cache
 glog-*.tar.gz
 packages/rpm-unknown
 packages/debian-*
+<<<<<<< HEAD
 
 
 # vs file
@@ -19,3 +20,12 @@ ipch/
 *.cachefile
 *.VC.db
 *.VC.VC.opendb
+=======
+CMakeCache.txt
+CMakeFiles/
+*.cmake
+config.h
+*.sln
+*.vcxproj
+*.filters
+>>>>>>> d72e3be82c832601e1d8f6fba580d2edf8be13da
