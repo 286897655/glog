@@ -1,3 +1,7 @@
+if (CMAKE_VERSION VERSION_LESS @glog_CMake_VERSION@)
+  message (FATAL_ERROR "CMake >= @glog_CMake_VERSION@ required")
+endif (CMAKE_VERSION VERSION_LESS @glog_CMake_VERSION@)
+
 @PACKAGE_INIT@
 
 include (CMakeFindDependencyMacro)

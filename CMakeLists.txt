@@ -8,23 +8,14 @@ if (POLICY CMP0063)
   cmake_policy (SET CMP0063 NEW)
 endif (POLICY CMP0063)
 
-project (glog)
-
-enable_testing ()
-
-set (GLOG_MAJOR_VERSION 0)
-set (GLOG_MINOR_VERSION 3)
-set (GLOG_PATCH_VERSION 5)
-
-set (GLOG_VERSION
-  ${GLOG_MAJOR_VERSION}.${GLOG_MINOR_VERSION}.${GLOG_PATCH_VERSION})
+project(glog VERSION 0.3.5 LANGUAGES C CXX)
 
 set (CPACK_PACKAGE_NAME glog)
 set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
-set (CPACK_PACKAGE_VERSION_MAJOR ${GLOG_MAJOR_VERSION})
-set (CPACK_PACKAGE_VERSION_MINOR ${GLOG_MINOR_VERSION})
-set (CPACK_PACKAGE_VERSION_PATCH ${GLOG_PATCH_VERSION})
-set (CPACK_PACKAGE_VERSION ${GLOG_VERSION})
+set (CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set (CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set (CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set (CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 
 option (WITH_GFLAGS "Use gflags" ON)
 option (WITH_THREADS "Enable multithreading support" ON)
@@ -35,6 +26,7 @@ list (APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include (CheckCSourceCompiles)
 include (CheckCXXCompilerFlag)
 include (CheckCXXSourceCompiles)
+include (CheckCXXSourceRuns)
 include (CheckFunctionExists)
 include (CheckIncludeFile)
 include (CheckIncludeFileCXX)
@@ -43,11 +35,13 @@ include (CheckStructHasMember)
 include (CheckSymbolExists)
 include (CheckTypeSize)
 include (CMakePackageConfigHelpers)
+include (CMakePushCheckState)
 include (CPack)
 include (CTest)
 include (DetermineGflagsNamespace)
 include (GNUInstallDirs)
 
+set (CMAKE_DEBUG_POSTFIX d)
 set (CMAKE_THREAD_PREFER_PTHREAD 1)
 
 if (WITH_GFLAGS)
@@ -120,6 +114,7 @@ check_cxx_compiler_flag (-Wunnamed-type-template-args
 check_symbol_exists (snprintf stdio.h HAVE_SNPRINTF)
 
 check_library_exists (unwind get_static_proc_name "" HAVE_LIB_UNWIND)
+check_library_exists (DbgHelp UnDecorateSymbolName "" HAVE_DBGHELP)
 
 find_library (UNWIND_LIBRARY NAMES unwind DOC "unwind library")
 mark_as_advanced (UNWIND_LIBRARY)
@@ -347,6 +342,49 @@ else (HAVE_USING_OPERATOR)
   set (ac_cv_cxx_using_operator 0)
 endif (HAVE_USING_OPERATOR)
 
+if (HAVE_EXECINFO_H)
+  set (HAVE_STACKTRACE 1)
+endif (HAVE_EXECINFO_H)
+
+if (WIN32 OR CYGWIN)
+  cmake_push_check_state (RESET)
+  set (CMAKE_REQUIRED_LIBRARIES DbgHelp)
+
+  check_cxx_source_runs ([=[
+  #include <windows.h>
+  #include <dbghelp.h>
+  #include <cstdlib>
+
+  void foobar() { }
+
+  int main()
+  {
+      HANDLE process = GetCurrentProcess();
+
+      if (!SymInitialize(process, NULL, TRUE))
+          return EXIT_FAILURE;
+
+      char buf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
+      SYMBOL_INFO *symbol = reinterpret_cast<SYMBOL_INFO *>(buf);
+      symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+      symbol->MaxNameLen = MAX_SYM_NAME;
+
+      void* const pc = reinterpret_cast<void*>(&foobar);
+      BOOL ret = SymFromAddr(process, reinterpret_cast<DWORD64>(pc), 0, symbol);
+
+      return ret ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  ]=] HAVE_SYMBOLIZE)
+
+  cmake_pop_check_state ()
+
+  if (HAVE_SYMBOLIZE)
+    set (HAVE_STACKTRACE 1)
+  endif (HAVE_SYMBOLIZE)
+elseif (UNIX OR (APPLE AND HAVE_DLADDR))
+  set (HAVE_SYMBOLIZE 1)
+endif (WIN32 OR CYGWIN)
+
 set (SIZEOF_VOID_P ${CMAKE_SIZEOF_VOID_P})
 
 if (WITH_THREADS AND Threads_FOUND)
@@ -369,7 +407,6 @@ set (CMAKE_CXX_VISIBILITY_PRESET default)
 set (CMAKE_VISIBILITY_INLINES_HIDDEN 1)
 
 set (GLOG_PUBLIC_H
-  ${CMAKE_CURRENT_BINARY_DIR}/config.h
   ${CMAKE_CURRENT_BINARY_DIR}/glog/logging.h
   ${CMAKE_CURRENT_BINARY_DIR}/glog/raw_logging.h
   ${CMAKE_CURRENT_BINARY_DIR}/glog/stl_logging.h
@@ -404,17 +441,22 @@ if (WIN32)
   )
 endif (WIN32)
 
-add_compile_options ($<$<BOOL:${HAVE_NO_UNNAMED_TYPE_TEMPLATE_ARGS}>:-Wno-unnamed-type-template-args>)
+add_compile_options ($<$<AND:$<BOOL:${HAVE_NO_UNNAMED_TYPE_TEMPLATE_ARGS}>,$<NOT:$<CXX_COMPILER_ID:GNU>>>:-Wno-unnamed-type-template-args>)
 
 add_library (glog
   ${GLOG_SRCS}
 )
+add_library(glog::glog ALIAS glog)
 
 set_target_properties (glog PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (UNWIND_LIBRARY)
   target_link_libraries (glog PUBLIC ${UNWIND_LIBRARY})
 endif (UNWIND_LIBRARY)
+
+if (HAVE_DBGHELP)
+   target_link_libraries (glog PUBLIC DbgHelp)
+endif (HAVE_DBGHELP)
 
 if (HAVE_PTHREAD)
   target_link_libraries (glog PUBLIC ${CMAKE_THREAD_LIBS_INIT})
@@ -434,8 +476,8 @@ if (gflags_FOUND)
   endif (NOT BUILD_SHARED_LIBS)
 endif (gflags_FOUND)
 
-set_target_properties (glog PROPERTIES VERSION ${GLOG_MAJOR_VERSION})
-set_target_properties (glog PROPERTIES SOVERSION ${GLOG_VERSION})
+set_target_properties (glog PROPERTIES VERSION ${PROJECT_VERSION})
+set_target_properties (glog PROPERTIES SOVERSION ${PROJECT_VERSION_MAJOR})
 
 if (WIN32)
   target_compile_definitions (glog PUBLIC GLOG_NO_ABBREVIATED_SEVERITIES)
@@ -483,19 +525,6 @@ else (NOT BUILD_SHARED_LIBS)
   target_compile_definitions (glog INTERFACE
     "GOOGLE_GLOG_DLL_DECL_FOR_UNITTESTS=${_IMPORT}")
 endif (NOT BUILD_SHARED_LIBS)
-
-if (HAVE_EXECINFO_H)
-  set (HAVE_STACKTRACE 1)
-endif (HAVE_EXECINFO_H)
-
-if (WIN32)
-  set (HAVE_STACKTRACE 1)
-  set (HAVE_SYMBOLIZE 1)
-endif (WIN32)
-
-if (UNIX OR (APPLE AND HAVE_DLADDR))
-  set (HAVE_SYMBOLIZE 1)
-endif (UNIX OR (APPLE AND HAVE_DLADDR))
 
 # Unit testing
 
@@ -598,8 +627,19 @@ install (TARGETS glog
   LIBRARY DESTINATION ${_glog_CMake_LIBDIR}
   ARCHIVE DESTINATION ${_glog_CMake_LIBDIR})
 
+set (glog_CMake_VERSION 3.0)
+
 if (gflags_FOUND)
-  set (gflags_DEPENDENCY "find_dependency (gflags ${gflags_VERSION})")
+  # Ensure clients locate only the package config and not third party find
+  # modules having the same name. This avoid cmake_policy PUSH/POP errors.
+  if (CMAKE_VERSION VERSION_LESS 3.9)
+    set (gflags_DEPENDENCY "find_dependency (gflags ${gflags_VERSION})")
+  else (CMAKE_VERSION VERSION_LESS 3.9)
+    # Passing additional find_package arguments to find_dependency is possible
+    # starting with CMake 3.9.
+    set (glog_CMake_VERSION 3.9)
+    set (gflags_DEPENDENCY "find_dependency (gflags ${gflags_VERSION} NO_MODULE)")
+  endif (CMAKE_VERSION VERSION_LESS 3.9)
 endif (gflags_FOUND)
 
 configure_package_config_file (glog-config.cmake.in
@@ -608,7 +648,7 @@ configure_package_config_file (glog-config.cmake.in
   NO_CHECK_REQUIRED_COMPONENTS_MACRO)
 
 write_basic_package_version_file (glog-config-version.cmake VERSION
-  ${GLOG_VERSION} COMPATIBILITY SameMajorVersion)
+  ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
 
 export (TARGETS glog NAMESPACE glog:: FILE glog-targets.cmake)
 export (PACKAGE glog)

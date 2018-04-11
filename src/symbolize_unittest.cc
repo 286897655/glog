@@ -84,6 +84,7 @@ static const char *TrySymbolize(void *pc) {
 
 // Make them C linkage to avoid mangled names.
 extern "C" {
+void nonstatic_func();
 void nonstatic_func() {
   volatile int a = 0;
   ++a;
@@ -317,6 +318,7 @@ inline void* always_inline inline_func() {
   return pc;
 }
 
+void* ATTRIBUTE_NOINLINE non_inline_func();
 void* ATTRIBUTE_NOINLINE non_inline_func() {
   register void *pc = NULL;
 #ifdef TEST_X86_32_AND_64
@@ -325,7 +327,7 @@ void* ATTRIBUTE_NOINLINE non_inline_func() {
   return pc;
 }
 
-void ATTRIBUTE_NOINLINE TestWithPCInsideNonInlineFunction() {
+static void ATTRIBUTE_NOINLINE TestWithPCInsideNonInlineFunction() {
 #if defined(TEST_X86_32_AND_64) && defined(HAVE_ATTRIBUTE_NOINLINE)
   void *pc = non_inline_func();
   const char *symbol = TrySymbolize(pc);
@@ -335,7 +337,7 @@ void ATTRIBUTE_NOINLINE TestWithPCInsideNonInlineFunction() {
 #endif
 }
 
-void ATTRIBUTE_NOINLINE TestWithPCInsideInlineFunction() {
+static void ATTRIBUTE_NOINLINE TestWithPCInsideInlineFunction() {
 #if defined(TEST_X86_32_AND_64) && defined(HAVE_ALWAYS_INLINE)
   void *pc = inline_func();  // Must be inlined.
   const char *symbol = TrySymbolize(pc);
@@ -347,7 +349,7 @@ void ATTRIBUTE_NOINLINE TestWithPCInsideInlineFunction() {
 }
 
 // Test with a return address.
-void ATTRIBUTE_NOINLINE TestWithReturnAddress() {
+static void ATTRIBUTE_NOINLINE TestWithReturnAddress() {
 #if defined(HAVE_ATTRIBUTE_NOINLINE)
   void *return_address = __builtin_return_address(0);
   const char *symbol = TrySymbolize(return_address);
@@ -357,10 +359,12 @@ void ATTRIBUTE_NOINLINE TestWithReturnAddress() {
 #endif
 }
 
-# elif defined(OS_WINDOWS)
+# elif defined(OS_WINDOWS) || defined(OS_CYGWIN)
 
+#ifdef _MSC_VER
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
+#endif
 
 struct Foo {
   static void func(int x);
@@ -378,7 +382,13 @@ TEST(Symbolize, SymbolizeWithDemangling) {
 }
 
 __declspec(noinline) void TestWithReturnAddress() {
-  void *return_address = _ReturnAddress();
+  void *return_address =
+#ifdef __GNUC__ // Cygwin and MinGW support
+	  __builtin_return_address(0)
+#else
+	  _ReturnAddress()
+#endif
+	  ;
   const char *symbol = TrySymbolize(return_address);
   CHECK(symbol != NULL);
   CHECK_STREQ(symbol, "main");
@@ -401,7 +411,7 @@ int main(int argc, char **argv) {
   TestWithPCInsideNonInlineFunction();
   TestWithReturnAddress();
   return RUN_ALL_TESTS();
-# elif defined(OS_WINDOWS)
+# elif defined(OS_WINDOWS) || defined(OS_CYGWIN)
   TestWithReturnAddress();
   return RUN_ALL_TESTS();
 # else  // OS_WINDOWS
