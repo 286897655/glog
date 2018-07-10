@@ -718,50 +718,117 @@ static void WriteToStderr(const char* message, size_t len) {
 
 #ifdef OS_WINDOWS
 namespace utf8 {
-    // http://bjoern.hoehrmann.de/utf-8/decoder/dfa/
-#define UTF8_ACCEPT 0
-#define UTF8_REJECT 12
+    /// State that represents a valid utf8 input sequence
+    static unsigned int const utf8_accept = 0;
+    /// State that represents an invalid utf8 input sequence
+    static unsigned int const utf8_reject = 1;
 
-    static const uint8_t utf8d[] = {
-        // The first part of the table maps bytes to character classes that
-        // to reduce the size of the transition table and create bitmasks.
-        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
-        7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-        8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
-        10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
-
-        // The second part is a transition table that maps a combination
-        // of a state of the automaton and a character class to a state.
-        0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
-        12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
-        12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
-        12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
-        12,36,12,12,12,12,12,12,12,12,12,12,
+    /// Lookup table for the UTF8 decode state machine
+    static uint8_t const utf8d[] = {
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 00..1f
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 20..3f
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 40..5f
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 60..7f
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9, // 80..9f
+        7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7, // a0..bf
+        8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // c0..df
+        0xa,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x4,0x3,0x3, // e0..ef
+        0xb,0x6,0x6,0x6,0x5,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8, // f0..ff
+        0x0,0x1,0x2,0x3,0x5,0x8,0x7,0x1,0x1,0x1,0x4,0x6,0x1,0x1,0x1,0x1, // s0..s0
+        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,0,1,0,1,1,1,1,1,1, // s1..s2
+        1,2,1,1,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1, // s3..s4
+        1,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,3,1,3,1,1,1,1,1,1, // s5..s6
+        1,3,1,1,1,1,1,3,1,3,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // s7..s8
     };
 
-    uint32_t inline
-        decode(uint32_t* state, uint32_t* codep, uint32_t byte) {
+    /// Decode the next byte of a UTF8 sequence
+    /**
+    * @param [out] state The decoder state to advance
+    * @param [out] codep The codepoint to fill in
+    * @param [in] byte The byte to input
+    * @return The ending state of the decode operation
+    */
+    inline uint32_t decode(uint32_t * state, uint32_t * codep, uint8_t byte) {
         uint32_t type = utf8d[byte];
 
-        *codep = (*state != UTF8_ACCEPT) ?
+        *codep = (*state != utf8_accept) ?
             (byte & 0x3fu) | (*codep << 6) :
             (0xff >> type) & (byte);
 
-        *state = utf8d[256 + *state + type];
+        *state = utf8d[256 + *state * 16 + type];
         return *state;
     }
-}
 
-bool IsValidUTF8(uint8_t* s) {
-    uint32_t codepoint, state = 0;
-    while (*s)
-        utf8::decode(&state, &codepoint, *s++);
+    /// Provides streaming UTF8 validation functionality
+    class validator {
+    public:
+        /// Construct and initialize the validator
+        validator() : m_state(utf8_accept), m_codepoint(0) {}
 
-    return state == UTF8_ACCEPT;
+        /// Advance the state of the validator with the next input byte
+        /**
+        * @param byte The byte to advance the validation state with
+        * @return Whether or not the byte resulted in a validation error.
+        */
+        bool consume(uint8_t byte) {
+            if (utf8::decode(&m_state, &m_codepoint, byte) == utf8_reject) {
+                return false;
+            }
+            return true;
+        }
+
+        /// Advance validator state with input from an iterator pair
+        /**
+        * @param begin Input iterator to the start of the input range
+        * @param end Input iterator to the end of the input range
+        * @return Whether or not decoding the bytes resulted in a validation error.
+        */
+        template <typename iterator_type>
+        bool decode(iterator_type begin, iterator_type end) {
+            for (iterator_type it = begin; it != end; ++it) {
+                unsigned int result = utf8::decode(
+                    &m_state,
+                    &m_codepoint,
+                    static_cast<uint8_t>(*it)
+                );
+
+                if (result == utf8_reject) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// Return whether the input sequence ended on a valid utf8 codepoint
+        /**
+        * @return Whether or not the input sequence ended on a valid codepoint.
+        */
+        bool complete() {
+            return m_state == utf8_accept;
+        }
+
+        /// Reset the validator to decode another message
+        void reset() {
+            m_state = utf8_accept;
+            m_codepoint = 0;
+        }
+    private:
+        uint32_t    m_state;
+        uint32_t    m_codepoint;
+    };
+
+    /// Validate a UTF8 string
+    /**
+    * convenience function that creates a validator, validates a complete string
+    * and returns the result.
+    */
+    inline bool validate(std::string const & s) {
+        validator v;
+        if (!v.decode(s.begin(), s.end())) {
+            return false;
+        }
+        return v.complete();
+    }
 }
 
 std::wstring Utf82Unicode(const std::string& utf8string) {
@@ -788,7 +855,7 @@ inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
 #ifdef OS_WINDOWS
     // On Windows, also output to the debugger
     std::wstring unicodestr;
-    if (IsValidUTF8((uint8_t*)message)) {
+    if (utf8::validate(message)) {
         unicodestr = Utf82Unicode(message);
     }
     else {
@@ -977,7 +1044,7 @@ void LogFileObject::FlushUnlocked(){
 bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   string string_filename = base_filename_+ time_pid_string + filename_extension_;
   const char* filename = string_filename.c_str();
-  int fd = open(filename, O_WRONLY | O_CREAT | O_EXCL, FLAGS_logfile_mode);
+  int fd = open(filename, O_WRONLY | O_APPEND | O_CREAT, FLAGS_logfile_mode);
   if (fd == -1) return false;
 #ifdef HAVE_FCNTL
   // Mark the file close-on-exec. We don't really care if this fails
@@ -1065,15 +1132,16 @@ void LogFileObject::Write(bool force_flush,
     // The logfile's filename will have the date/time & pid in it
     ostringstream time_pid_stream;
     time_pid_stream.fill('0');
-    time_pid_stream << 1900+tm_time.tm_year
-                    << setw(2) << 1+tm_time.tm_mon
-                    << setw(2) << tm_time.tm_mday
-                    << '-'
+    time_pid_stream << 1900 + tm_time.tm_year
+        << setw(2) << 1 + tm_time.tm_mon
+        << setw(2) << tm_time.tm_mday;
+    // TODO zhaoj not used hour min sec and thread id
+                    /*<< '-'
                     << setw(2) << tm_time.tm_hour
                     << setw(2) << tm_time.tm_min
                     << setw(2) << tm_time.tm_sec
                     << '.'
-                    << GetMainThreadPid();
+                    << GetMainThreadPid();*/
     const string& time_pid_string = time_pid_stream.str();
 
     if (base_filename_selected_) {
