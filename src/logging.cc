@@ -829,21 +829,38 @@ namespace utf8 {
         }
         return v.complete();
     }
+
+    std::wstring Utf82Unicode(const std::string& utf8string) {
+        int widesize = ::MultiByteToWideChar(CP_UTF8, 0, utf8string.c_str(), -1, NULL, NULL);
+        std::vector<wchar_t> resultstring(widesize);
+        int convresult = ::MultiByteToWideChar(CP_UTF8, 0, utf8string.c_str(), -1, &resultstring[0], widesize);
+        return std::wstring(&resultstring[0]);
+    }
+
+    std::wstring AnsiToUnicode(const std::string& szStr) {
+        int nLen = ::MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, szStr.c_str(), -1, NULL, 0);
+        std::vector<wchar_t> resultstring(nLen);
+        int convert = ::MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, szStr.c_str(), -1, &resultstring[0], nLen);
+        return std::wstring(&resultstring[0]);
+    }
+
+    inline std::string UnicodeToAnsi(const std::wstring& szStr)
+    {
+        int nLen = ::WideCharToMultiByte(CP_ACP, 0, szStr.c_str(), -1, NULL, 0, NULL, NULL);
+        std::vector<char> resultstring(nLen);
+        int convert = ::WideCharToMultiByte(CP_ACP, 0, szStr.c_str(), -1, &resultstring[0], nLen, NULL, NULL);
+        return std::string(&resultstring[0]);
+    }
+
+    inline std::string Unicode2Utf8(const std::wstring& widestring)
+    {
+        int utf8size = ::WideCharToMultiByte(CP_UTF8, 0, widestring.c_str(), -1, NULL, 0, NULL, NULL);
+        std::vector<char> resultstring(utf8size);
+        int convresult = ::WideCharToMultiByte(CP_UTF8, 0, widestring.c_str(), -1, &resultstring[0], utf8size, NULL, NULL);
+        return std::string(&resultstring[0]);
+    }
 }
 
-std::wstring Utf82Unicode(const std::string& utf8string) {
-    int widesize = ::MultiByteToWideChar(CP_UTF8, 0, utf8string.c_str(), -1, NULL, NULL);
-    std::vector<wchar_t> resultstring(widesize);
-    int convresult = ::MultiByteToWideChar(CP_UTF8, 0, utf8string.c_str(), -1, &resultstring[0], widesize);
-    return std::wstring(&resultstring[0]);
-}
-
-std::wstring AnsiToUnicode(const std::string& szStr) {
-    int nLen = ::MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, szStr.c_str(), -1, NULL, 0);
-    std::vector<wchar_t> resultstring(nLen);
-    int convert = ::MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, szStr.c_str(), -1, &resultstring[0], nLen);
-    return std::wstring(&resultstring[0]);
-}
 #endif
 
 
@@ -856,10 +873,10 @@ inline void LogDestination::MaybeLogToStderr(LogSeverity severity,
     // On Windows, also output to the debugger
     std::wstring unicodestr;
     if (utf8::validate(message)) {
-        unicodestr = Utf82Unicode(message);
+        unicodestr = utf8::Utf82Unicode(message);
     }
     else {
-        unicodestr = AnsiToUnicode(message);
+        unicodestr = utf8::AnsiToUnicode(message);
     }
     OutputDebugString(unicodestr.c_str());
 #endif
@@ -1043,8 +1060,14 @@ void LogFileObject::FlushUnlocked(){
 
 bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   string string_filename = base_filename_+ time_pid_string + filename_extension_;
+  // TODO zhaoj
+  if (utf8::validate(string_filename)) {
+      std::wstring unicodefile = utf8::Utf82Unicode(string_filename);
+      string_filename = utf8::UnicodeToAnsi(unicodefile);
+  }
   const char* filename = string_filename.c_str();
   int fd = open(filename, O_WRONLY | O_APPEND | O_CREAT, FLAGS_logfile_mode);
+  
   if (fd == -1) return false;
 #ifdef HAVE_FCNTL
   // Mark the file close-on-exec. We don't really care if this fails
@@ -1055,6 +1078,7 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   if (file_ == NULL) {  // Man, we're screwed!
     close(fd);
     unlink(filename);  // Erase the half-baked evidence: an unusable log file
+    
     return false;
   }
 
